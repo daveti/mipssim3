@@ -29,6 +29,7 @@ public class Instruction {
     public int address;
     public boolean done;
     public Result result;
+    public int bufPhase;
     
     public Instruction(int cat, String op, String tarReg, String srcReg,
             String src2nd, String srcImm, String tarAdr, String off, int addr) {
@@ -46,6 +47,7 @@ public class Instruction {
         order = 0;
         done = false;
         result = null;
+        bufPhase = -1;
     }
     
     public Instruction(int cat, int addr) {
@@ -63,6 +65,7 @@ public class Instruction {
         order = 0;
         done = false;
         result = null;
+        bufPhase = -1;
     }
     
     /**
@@ -121,7 +124,10 @@ public class Instruction {
                 break;
                 
             case 2:
-                s += opcode + " " + targetReg + ", " + sourceReg + ", " + source2nd;
+                if (("SRL".equals(opcode)) || ("SRA".equals(opcode)))
+                    s += opcode + " " + targetReg + ", " + sourceReg + ", #" + sourceImm;
+                else
+                    s += opcode + " " + targetReg + ", " + sourceReg + ", " + source2nd;
                 break;
                 
             case 3:

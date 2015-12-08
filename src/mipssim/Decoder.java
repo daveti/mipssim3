@@ -215,7 +215,10 @@ public class Decoder {
                     if ((regFile.isIdxValid(dIdx)) && (regFile.isIdxValid(idx1)) && (regFile.isIdxValid(idx2))) {
                         ins.targetReg = regFile.getRegPrefix() + Integer.toString(dIdx);
                         ins.sourceReg = regFile.getRegPrefix() + Integer.toString(idx1);
-                        ins.source2nd = regFile.getRegPrefix() + Integer.toString(idx2);
+                        if (("SRL".equals(ins.opcode)) || ("SRA".equals(ins.opcode)))
+                            ins.sourceImm = Integer.toString(idx2);
+                        else
+                            ins.source2nd = regFile.getRegPrefix() + Integer.toString(idx2);
                     } else {
                         System.out.println("Error: cate 2 invalid dest/src idx " + dest + "," + src1 + "," + src2);
                         failure = true;

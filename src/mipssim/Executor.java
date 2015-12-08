@@ -24,6 +24,9 @@ public class Executor {
     private final boolean debug = false;
     private final boolean debug2 = false;
     private final boolean debug3 = false;
+    private final boolean debug4 = false;
+    private final boolean debug5 = false;
+    private final boolean debug6 = false;
     private int pc;
     private int cycle;
     private int order;
@@ -46,6 +49,7 @@ public class Executor {
     private final Queue<Instruction> traceBoard;    // used by IF
     private final Queue<Instruction> scoreBoard;    // used by IS
     private final Queue<Instruction> buff1Board;    // used by IS
+    private final Queue<Instruction> buff7Board;    // used by DIV
 
     // For IF
     private Instruction waiting;
@@ -81,6 +85,7 @@ public class Executor {
         traceBoard = new Queue();
         scoreBoard = new Queue();
         buff1Board = new Queue(8);
+        buff7Board = new Queue();
 
         waiting = null;
         executed = null;
@@ -149,7 +154,7 @@ public class Executor {
             i.done = true;
         }
         if (!buff7.isEmpty() && !waitForNextCycle(buff7)) {
-            i = buff10.dequeue();
+            i = buff7.dequeue();
             regFile.setRegLoVal(i.result.quotient);
             regFile.setRegHiVal(i.result.remainder);
             i.done = true;
@@ -207,7 +212,7 @@ public class Executor {
 
     private void mul2Unit() {
         // buff8 -> buff11
-        if (buff8.isEmpty() || buff1.isFull() || waitForNextCycle(buff8)) {
+        if (buff8.isEmpty() || buff11.isFull() || waitForNextCycle(buff8)) {
             return;
         }
 
@@ -271,7 +276,12 @@ public class Executor {
         switch (i.category) {
             case 2:
                 int src1 = regFile.getRegVal(i.sourceReg);
-                int src2 = regFile.getRegVal(i.source2nd);
+                int src2;
+                if (("SRL".equals(i.opcode)) || ("SRA".equals(i.opcode)))
+                    src2 = Integer.parseInt(i.sourceImm);
+                else
+                    src2 = regFile.getRegVal(i.source2nd);
+                
                 switch (i.opcode) {
                     case "ADD":
                         // rt <- rs1 + rs2
@@ -357,6 +367,7 @@ public class Executor {
 
         // Generate the result and push it to WB
         i.result = new Result(res, -1, i.targetReg, false, -1, -1, cycle);
+        i.bufPhase = 9;
         i.setClock(cycle);
         buff9.enqueue(i);
     }
@@ -374,6 +385,16 @@ public class Executor {
     }
 
     private void divUnit() {
+        // Peek buff7Board to see if any div is done
+        if ((!buff7Board.isEmpty()) && ((cycle-buff7Board.peek().clock) >= 3)) {
+            Instruction i = buff7Board.dequeue();
+            i.setClock(cycle);
+            buff7.enqueue(i);
+            if (debug5)
+                System.out.println("Debug5: i=" + i + " done" +
+                        "with clock=" +  i.clock + " at cycle=" + cycle);
+        }
+        
         // buff3 -> buff7
         if (buff3.isEmpty() || buff7.isFull() || waitForNextCycle(buff3)) {
             return;
@@ -391,8 +412,8 @@ public class Executor {
         i.result = new Result(-1, -1, null, true, rem, quo, cycle);
         i.setClock(cycle);
 
-        // Enqueue
-        buff7.enqueue(i);
+        // Enqueue to buff7Board before 4 cycles are passed
+        buff7Board.enqueue(i);
     }
 
     private void alu2Unit() {
@@ -445,6 +466,25 @@ public class Executor {
         }
         buff6.enqueue(i);
     }
+    
+    private boolean readyToDigest4Alu1(Instruction i) {
+        switch (i.bufPhase) {
+            case 9:
+                if (i.clock < cycle)
+                    return true;
+                break;
+                
+            case 5:
+                if ((!buff9.isFull()) && (i.clock < cycle))
+                    return true;
+                break;
+                
+            default:
+                break;
+        }
+        
+        return false;
+    }
 
     private boolean noHazardWAR(String name, String src1, String src2, String dst) {
         // No WAR with earlier not-issued - buff1Board
@@ -469,6 +509,8 @@ public class Executor {
             if (!i.done)
                 warList.add(i);
         //ArrayList<Instruction> buffList = buff1Board.toArrayList();
+        if (debug6)
+            System.out.println("Debug6: warList=" + warList);
         for (Instruction i : warList) {
             switch (i.opcode) {
                 case "LW":
@@ -490,31 +532,46 @@ public class Executor {
                 case "SUB":
                 case "AND":
                 case "OR":
-                case "SRL":
-                case "SRA":
+                    if ((dst.equals(i.sourceReg)) || (dst.equals(i.source2nd))) {
+                        if (!readyToDigest4Alu1(i))
+                            return false;
+                    }
+                    break;
+                    
                 case "MULT":
                 case "DIV":
                     if ((dst.equals(i.sourceReg)) || (dst.equals(i.source2nd))) {
                         return false;
                     }
                     break;
+                    
+                case "SRL":
+                case "SRA":
+                    if ((dst.equals(i.sourceReg)) && (!readyToDigest4Alu1(i)))
+                        return false;
+                    break;
 
                 case "ADDI":
                 case "ANDI":
                 case "ORI":
-                    if (dst.equals(i.sourceReg)) {
+                    if ((dst.equals(i.sourceReg)) && (!readyToDigest4Alu1(i))) {
+                        if (debug4)
+                            System.out.println("Debug4: name=" + name + ", src1=" +
+                                    src1 + ", src2=" + src2 + ", dst" + dst +
+                                    " WAR with i=" + i);
                         return false;
                     }
                     break;
 
                 case "MFHI":
                     if (("HI".equals(dst)) || ("DIV".equals(name))) {
-                        return false;
+                        if (!readyToDigest4Alu1(i))
+                            return false;
                     }
                     break;
 
                 case "MFLO":
-                    if ("LO".equals(dst)) {
+                    if (("LO".equals(dst)) && (!readyToDigest4Alu1(i))) {
                         return false;
                     }
                     break;
@@ -613,7 +670,7 @@ public class Executor {
         boolean noRAW = noHazardRAW(name, src1, src2, dst);
         boolean noWAW = noHazardWAW(name, src1, src2, dst);
         boolean noWAR = noHazardWAR(name, src1, src2, dst);
-        if (debug2)
+        if (debug6)
             System.out.println("Debug: noRAW " + noRAW + ", noWAW " + noWAW +
                     ", noWAR " + noWAR + ", for i: " + name +
                     " at cycle " + cycle);
@@ -732,9 +789,13 @@ public class Executor {
                         case "SRL":
                         case "SRA":
                             src1 = i.sourceReg;
-                            src2 = i.source2nd;
+                            if (("SRL".equals(i.opcode)) || ("SRA".equals(i.opcode)))
+                                src2 = null;
+                            else
+                                src2 = i.source2nd;
                             dst = i.targetReg;
                             if (noHazard(i.opcode, src1, src2, dst)) {
+                                i.bufPhase = 5;
                                 buff5.enqueue(i);
                                 scoreBoard.enqueue(i);
                                 issued = true;
@@ -761,6 +822,7 @@ public class Executor {
                             src1 = i.sourceReg;
                             dst = i.targetReg;
                             if (noHazard(i.opcode, src1, null, dst)) {
+                                i.bufPhase = 5;
                                 buff5.enqueue(i);
                                 scoreBoard.enqueue(i);
                                 issued = true;
@@ -824,6 +886,7 @@ public class Executor {
                             src1 = "HI";
                             dst = i.targetReg;
                             if (noHazard("MFHI", src1, null, dst)) {
+                                i.bufPhase = 5;
                                 buff5.enqueue(i);
                                 scoreBoard.enqueue(i);
                                 issued = true;
@@ -834,6 +897,7 @@ public class Executor {
                             src1 = "LO";
                             dst = i.targetReg;
                             if (noHazard("MFLO", src1, null, dst)) {
+                                i.bufPhase = 5;
                                 buff5.enqueue(i);
                                 scoreBoard.enqueue(i);
                                 issued = true;
@@ -1044,6 +1108,10 @@ public class Executor {
             // Update the pc and order
             pc++;
             order++;
+            
+            // Check if the buff1 is full
+            if (buff1.isFull())
+                return 0;
         }
 
         return 0;
@@ -1071,6 +1139,7 @@ public class Executor {
             
             // Try to call Mem early~
             alu2Unit();
+            //alu1Unit();
             memUnit();
 
             // Issue
@@ -1180,7 +1249,7 @@ public class Executor {
         if (i.clock > cycle)
             System.out.println("Buf7:");
         else
-            System.out.println("BUf7: [" + i.result.remainder + ", " + i.result.quotient + "]");
+            System.out.println("Buf7: [" + i.result.remainder + ", " + i.result.quotient + "]");
     }
 
     private void dumpBuff6() {
